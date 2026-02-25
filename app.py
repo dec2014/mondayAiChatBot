@@ -2,7 +2,6 @@
 
 import streamlit as st
 import requests
-import time
 
 # ================= CONFIG =================
 MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
@@ -10,8 +9,11 @@ HF_API_KEY = st.secrets["HF_API_KEY"]
 
 MONDAY_URL = "https://api.monday.com/v2"
 
-# Faster & more reliable than large models
-HF_MODEL_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+# ✅ NEW Hugging Face Chat endpoint
+HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
+
+# ✅ Supported model for free accounts
+HF_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
 BOARD_IDS = [5026839123, 5026839113]
 # =========================================
@@ -86,14 +88,13 @@ def fetch_latest_context():
     return format_selected_boards(response.json())
 
 
-# ---------- HUGGING FACE AI ----------
+# ---------- HUGGING FACE AI (FIXED) ----------
 def ask_huggingface(question, context):
     if not context or len(context.strip()) < 20:
         return "No sufficient data available from the boards yet."
 
-    # Limit context size to avoid overload
-    MAX_CONTEXT_CHARS = 8000
-    context = context[:MAX_CONTEXT_CHARS]
+    # Limit context size (important)
+    context = context[:6000]
 
     prompt = f"""
 Answer the question using ONLY the data below.
@@ -104,42 +105,33 @@ DATA:
 
 QUESTION:
 {question}
-
-ANSWER:
 """
 
     headers = {
-        "Authorization": f"Bearer {HF_API_KEY}"
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type": "application/json"
     }
 
     payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 200,
-            "temperature": 0.2
-        }
+        "model": HF_MODEL_NAME,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 300
     }
 
-    # Retry logic for model warm-up
-    for attempt in range(3):
-        response = requests.post(
-            HF_MODEL_URL,
-            headers=headers,
-            json=payload,
-            timeout=90
-        )
+    response = requests.post(
+        HF_CHAT_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
 
-        # ✅ Success
-        if response.status_code == 200:
-            result = response.json()
-            return result[0]["generated_text"]
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
 
-        # 🟡 Model is loading (very common on free tier)
-        if response.status_code == 503:
-            time.sleep(15)
-            continue
-
-    return "AI model is still warming up. Please try again in a minute."
+    return f"AI error: {response.status_code}"
 
 
 # ================= STREAMLIT UI =================
