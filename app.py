@@ -97,7 +97,7 @@ def ask_huggingface(question, context):
         return "No sufficient data available from the boards yet."
 
     # Limit context size (important)
-    context = context[:6000]
+    context = context
 
     prompt = f"""
 Answer the question using ONLY the data below.
@@ -142,7 +142,7 @@ QUESTION:
 # ================= STREAMLIT UI =================
 st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
 
-st.title("🤖 monday.com AI Chatbot (Hugging Face)")
+st.title(" monday.com AI Chatbot (Hugging Face)")
 st.caption("Live data • Stable AI • Internship-ready")
 
 question = st.text_input("Ask a question about work orders or deals:")
