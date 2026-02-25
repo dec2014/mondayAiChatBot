@@ -7,8 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1XFIvrb0gM8VYwqyKMCdbGE_wATI1rgP1
 """
 
-!pip install streamlit
-!pip install requests
 import streamlit as st
 import requests
 import openai
