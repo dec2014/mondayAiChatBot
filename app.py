@@ -7,19 +7,48 @@ import requests
 MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
 HF_API_KEY = st.secrets["HF_API_KEY"]
 
-MONDAY_URL = "https://api.monday.com"
+MONDAY_URL = "https://api.monday.com/v2"
 
-# ✅ NEW Hugging Face Chat endpoint
-HF_CHAT_URL = "https://router.huggingface.co"
-
-# ✅ Supported model for free accounts
+# Hugging Face Chat Completions API (NEW)
+HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
 BOARD_IDS = [5026839123, 5026839113]
+# =========================================
 
+
+# ---------- SESSION MEMORY ----------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-# =========================================
+
+
+# ---------- PROMPT BUILDER ----------
+def build_prompt(question, context):
+    return f"""
+You are a professional business assistant analyzing task and deal data.
+
+IMPORTANT RULES:
+- Use ONLY the data provided.
+- Do NOT guess or invent values.
+- If information is missing, say "Not available".
+- Apply logical reasoning when needed:
+  - High priority > Normal
+  - Unassigned tasks are risky
+  - Pending tasks are urgent
+
+DATA:
+{context}
+
+USER QUESTION:
+{question}
+
+RESPONSE FORMAT:
+- Start with a short direct answer.
+- Then provide details in bullet points.
+- Be clear and concise.
+
+FINAL ANSWER:
+"""
 
 
 # ---------- FORMAT DATA ----------
@@ -58,8 +87,6 @@ def format_selected_boards(data):
 
 
 # ---------- FETCH MONDAY DATA ----------
-# ⚡ EFFICIENCY: Added cache so it doesn't reload Monday.com on every click
-@st.cache_data(ttl=600) 
 def fetch_latest_context():
     query = f"""
     {{
@@ -85,7 +112,7 @@ def fetch_latest_context():
 
     response = requests.post(
         MONDAY_URL,
-        json={"query": query},
+        json={{"query": query}},
         headers=headers,
         timeout=30
     )
@@ -93,80 +120,79 @@ def fetch_latest_context():
     return format_selected_boards(response.json())
 
 
-# ---------- HUGGING FACE AI (FIXED) ----------
+# ---------- HUGGING FACE AI ----------
+
+
 def ask_huggingface(question, context):
     if not context or len(context.strip()) < 20:
-        return "No sufficient data available from the boards yet."
-
-    # Limit context size (important)
-    context = context[:15000] # Slightly reduced for better speed
-
-    prompt = f"""
-You are a professional business data assistant.
-... (Rest of your original prompt text) ...
-DATA:
-{context}
-
-USER QUESTION:
-{question}
-
-FINAL ANSWER:
-"""
+        yield "No sufficient data available from the boards yet."
+        return
 
     headers = {
         "Authorization": f"Bearer {HF_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    # ⚡ EFFICIENCY: Added slice [-4:] to history so the bot doesn't get 
-    # slower and more expensive as the chat gets longer.
+    # ✅ 1. Keep history short and separate Context from History
+    # We pass context in the System message to save tokens in the conversation loop
     payload = {
-    "model": HF_MODEL_NAME,
-    "messages": (
-        [{"role": "system", "content": "You are a helpful assistant."}]
-        + st.session_state.chat_history[-4:] 
-        + [{"role": "user", "content": prompt}]
-    ),
-    "temperature": 0.3,
-    "max_tokens": 300
-}
+        "model": HF_MODEL_NAME,
+        "messages": [
+            {"role": "system", "content": f"You are a professional assistant. Context: {context[:5000]}"},
+            *st.session_state.chat_history[-4:], # Only last 2 rounds
+            {"role": "user", "content": question}
+        ],
+        "temperature": 0.3,
+        "max_tokens": 500,
+        "stream": True # ✅ 2. Enable Streaming
+    }
 
-    response = requests.post(
-        HF_CHAT_URL,
-        headers=headers,
-        json=payload,
-        timeout=60
-    )
-
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-
-    return f"AI error: {response.status_code}"
+    # ✅ 3. Handle the Stream response
+    response = requests.post(HF_CHAT_URL, headers=headers, json=payload, stream=True, timeout=60)
+    
+    full_response = ""
+    for line in response.iter_lines():
+        if line:
+            line_text = line.decode("utf-8").replace("data: ", "")
+            if line_text == "[DONE]": break
+            try:
+                # Extract the character/word from the JSON chunk
+                content = json.loads(line_text)["choices"][0]["delta"].get("content", "")
+                full_response += content
+                yield content # This "yields" tokens to the UI one by one
+            except:
+                pass
 
 
 # ================= STREAMLIT UI =================
 st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
 
-st.title(" monday.com AI Chatbot (Hugging Face)")
-st.caption("Live data • Stable AI • Internship-ready")
+st.title("🤖 monday.com AI Chatbot")
+st.caption("Conversational • Context-aware • Internship-ready")
 
-# ⚡ EFFICIENCY: Show chat history so the user remembers what was said
+# ================= STREAMLIT UI =================
+# ... (title and caption code) ...
+
+# Display chat history so it doesn't disappear
 for chat in st.session_state.chat_history:
     with st.chat_message(chat["role"]):
-        st.write(chat["content"])
+        st.markdown(chat["content"])
 
-question = st.text_input("Ask a question about work orders or deals:")
+question = st.chat_input("Ask a question about work orders or deals:")
 
 if question:
-    with st.spinner("Fetching latest data from monday.com..."):
+    # Show user message immediately
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.spinner("Fetching latest data..."):
         context_data = fetch_latest_context()
 
-    with st.spinner("AI is thinking..."):
-        answer = ask_huggingface(question, context_data)
+    # ✅ 4. Use st.write_stream for the typing effect
+    with st.chat_message("assistant"):
+        # This calls our streaming function and displays it live
+        full_answer = st.write_stream(ask_huggingface(question, context_data))
 
-    st.success("Answer")
-    st.write(answer)
-    
-    # Save to history
+    # ✅ 5. Save only the clean Question and Answer to history (No Prompt Bloat)
     st.session_state.chat_history.append({"role": "user", "content": question})
-    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+    st.session_state.chat_history.append({"role": "assistant", "content": full_answer})
