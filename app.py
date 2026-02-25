@@ -100,39 +100,35 @@ def fetch_latest_context():
 
 # ---------- CLAUDE CHAT ----------
 def ask_chatbot(question, context):
-    # Claude does NOT allow empty or tiny prompts
     if not context or len(context.strip()) < 20:
         return "No sufficient data available from the boards yet."
 
-    prompt = (
-        "You are an assistant that answers questions using ONLY the data below.\n"
-        "Do NOT guess or invent information.\n\n"
-        "DATA:\n"
-        f"{context}\n\n"
-        "QUESTION:\n"
-        f"{question}\n\n"
-        "ANSWER:"
+    # 🔒 Hard limit context to avoid Claude BadRequest
+    MAX_CONTEXT_CHARS = 12000
+    safe_context = context[:MAX_CONTEXT_CHARS]
+
+    prompt = f"""
+You are a helpful assistant.
+Answer the question using ONLY the data provided below.
+Do NOT guess or add new information.
+
+DATA:
+{safe_context}
+
+QUESTION:
+{question}
+
+ANSWER:
+"""
+
+    response = claude_client.completions.create(
+        model="claude-2.1",
+        prompt=prompt,
+        max_tokens_to_sample=400,
+        temperature=0.2
     )
 
-    response = claude_client.messages.create(
-        model="claude-3-haiku-20240307",
-        max_tokens=400,
-        temperature=0.2,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    }
-                ]
-            }
-        ]
-    )
-
-    return response.content[0].text
-
+    return response.completion.strip()
 
 # ================= STREAMLIT UI =================
 st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
