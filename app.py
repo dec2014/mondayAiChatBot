@@ -9,46 +9,17 @@ HF_API_KEY = st.secrets["HF_API_KEY"]
 
 MONDAY_URL = "https://api.monday.com/v2"
 
-# Hugging Face Chat Completions API (NEW)
+# ✅ NEW Hugging Face Chat endpoint
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
+
+# ✅ Supported model for free accounts
 HF_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
 BOARD_IDS = [5026839123, 5026839113]
-# =========================================
 
-
-# ---------- SESSION MEMORY ----------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-
-
-# ---------- PROMPT BUILDER ----------
-def build_prompt(question, context):
-    return f"""
-You are a professional business assistant analyzing task and deal data.
-
-IMPORTANT RULES:
-- Use ONLY the data provided.
-- Do NOT guess or invent values.
-- If information is missing, say "Not available".
-- Apply logical reasoning when needed:
-  - High priority > Normal
-  - Unassigned tasks are risky
-  - Pending tasks are urgent
-
-DATA:
-{context}
-
-USER QUESTION:
-{question}
-
-RESPONSE FORMAT:
-- Start with a short direct answer.
-- Then provide details in bullet points.
-- Be clear and concise.
-
-FINAL ANSWER:
-"""
+# =========================================
 
 
 # ---------- FORMAT DATA ----------
@@ -112,7 +83,7 @@ def fetch_latest_context():
 
     response = requests.post(
         MONDAY_URL,
-        json={{"query": query}},
+        json={"query": query},
         headers=headers,
         timeout=30
     )
@@ -120,33 +91,40 @@ def fetch_latest_context():
     return format_selected_boards(response.json())
 
 
-# ---------- HUGGING FACE AI ----------
+# ---------- HUGGING FACE AI (FIXED) ----------
 def ask_huggingface(question, context):
     if not context or len(context.strip()) < 20:
         return "No sufficient data available from the boards yet."
 
-    # Limit context size
+    # Limit context size (important)
     context = context[:6000]
 
-    prompt = build_prompt(question, context)
+    prompt = f"""
+Answer the question using ONLY the data below.
+Do not guess or add extra information.
+
+DATA:
+{context}
+
+QUESTION:
+{question}
+"""
 
     headers = {
         "Authorization": f"Bearer {HF_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    messages = (
+    payload = {
+    "model": HF_MODEL_NAME,
+    "messages": (
         [{"role": "system", "content": "You are a helpful, professional assistant."}]
         + st.session_state.chat_history
         + [{"role": "user", "content": prompt}]
-    )
-
-    payload = {
-        "model": HF_MODEL_NAME,
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": 400
-    }
+    ),
+    "temperature": 0.3,
+    "max_tokens": 300
+}
 
     response = requests.post(
         HF_CHAT_URL,
@@ -164,15 +142,8 @@ def ask_huggingface(question, context):
 # ================= STREAMLIT UI =================
 st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
 
-st.title("🤖 monday.com AI Chatbot")
-st.caption("Conversational • Context-aware • Internship-ready")
-
-# Display chat history
-for msg in st.session_state.chat_history:
-    if msg["role"] == "user":
-        st.markdown(f"**You:** {msg['content']}")
-    elif msg["role"] == "assistant":
-        st.markdown(f"**AI:** {msg['content']}")
+st.title("🤖 monday.com AI Chatbot (Hugging Face)")
+st.caption("Live data • Stable AI • Internship-ready")
 
 question = st.text_input("Ask a question about work orders or deals:")
 
@@ -183,12 +154,11 @@ if question:
     with st.spinner("AI is thinking..."):
         answer = ask_huggingface(question, context_data)
 
-    # Save conversation
+    st.success("Answer")
+    st.write(answer)
     st.session_state.chat_history.append(
-        {"role": "user", "content": question}
+    {"role": "user", "content": question}
     )
     st.session_state.chat_history.append(
-        {"role": "assistant", "content": answer}
+    {"role": "assistant", "content": answer}
     )
-
-    st.experimental_rerun()
