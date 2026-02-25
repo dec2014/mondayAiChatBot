@@ -13,18 +13,19 @@ import streamlit as st
 import requests
 from anthropic import Anthropic
 
-# ---------------- CONFIG ----------------
+# ================= CONFIG =================
 MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
 CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
 
 MONDAY_URL = "https://api.monday.com/v2"
 BOARD_IDS = [5026839123, 5026839113]  # Work Order + Deal Funnel
-# --------------------------------------
+# =========================================
 
 # Initialize Claude client
 claude_client = Anthropic(api_key=CLAUDE_API_KEY)
 
 
+# ---------- FORMAT DATA ----------
 def format_selected_boards(data):
     DEFAULTS = {
         "Status": "Pending",
@@ -37,14 +38,19 @@ def format_selected_boards(data):
 
     text = ""
 
-    for board in data["data"]["boards"]:
+    boards = data.get("data", {}).get("boards", [])
+    if not boards:
+        return ""
+
+    for board in boards:
         text += f"\nBoard: {board['name']}\n"
         text += "-" * 40 + "\n"
 
-        for item in board["items_page"]["items"]:
+        items = board.get("items_page", {}).get("items", [])
+        for item in items:
             text += f"Task: {item['name']}\n"
 
-            for col in item["column_values"]:
+            for col in item.get("column_values", []):
                 title = col["column"]["title"]
                 value = col["text"]
 
@@ -58,6 +64,7 @@ def format_selected_boards(data):
     return text
 
 
+# ---------- FETCH MONDAY DATA ----------
 def fetch_latest_context():
     query = f"""
     {{
@@ -91,33 +98,43 @@ def fetch_latest_context():
     return format_selected_boards(response.json())
 
 
+# ---------- CLAUDE CHAT ----------
 def ask_chatbot(question, context):
-    prompt = f"""
-You are an assistant that answers questions using ONLY the data below.
-Do not make assumptions beyond the data.
+    # Claude does NOT allow empty or tiny prompts
+    if not context or len(context.strip()) < 20:
+        return "No sufficient data available from the boards yet."
 
-DATA:
-{context}
-
-QUESTION:
-{question}
-
-ANSWER:
-"""
+    prompt = (
+        "You are an assistant that answers questions using ONLY the data below.\n"
+        "Do NOT guess or invent information.\n\n"
+        "DATA:\n"
+        f"{context}\n\n"
+        "QUESTION:\n"
+        f"{question}\n\n"
+        "ANSWER:"
+    )
 
     response = claude_client.messages.create(
-        model="claude-3-haiku-20240307",  # fast, cheap, reliable
-        max_tokens=500,
+        model="claude-3-haiku-20240307",
+        max_tokens=400,
         temperature=0.2,
         messages=[
-            {"role": "user", "content": prompt}
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ]
+            }
         ]
     )
 
     return response.content[0].text
 
 
-# ---------------- STREAMLIT UI ----------------
+# ================= STREAMLIT UI =================
 st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
 
 st.title("🤖 monday.com AI Chatbot (Claude)")
@@ -126,10 +143,10 @@ st.caption("Live data • Auto-updated • Board-aware")
 question = st.text_input("Ask a question about work orders or deals:")
 
 if question:
-    with st.spinner("Fetching latest data..."):
+    with st.spinner("Fetching latest data from monday.com..."):
         context_data = fetch_latest_context()
 
-    with st.spinner("Thinking..."):
+    with st.spinner("Claude is thinking..."):
         answer = ask_chatbot(question, context_data)
 
     st.success("Answer")
