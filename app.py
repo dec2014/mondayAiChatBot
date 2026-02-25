@@ -11,8 +11,8 @@ import requests
 from openai import OpenAI
 
 # ---------------- CONFIG ----------------
-MONDAY_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjYyNTU4MzIzMCwiYWFpIjoxMSwidWlkIjoxMDAyODQyNzgsImlhZCI6IjIwMjYtMDItMjVUMDU6NDI6MjguMTg5WiIsInBlciI6Im1lOndyaXRlIiwiYWN0aWQiOjMzOTYwMzM5LCJyZ24iOiJhcHNlMiJ9.amcaIqOXKQzGNoEY8Tafd8pRlJjQ8bBvwW9UoEaYc6E"
-OPENAI_API_KEY = "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"
+MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
 MONDAY_URL = "https://api.monday.com/v2"
 BOARD_IDS = [5026839123, 5026839113]  # Work Order + Deal Funnel
@@ -102,7 +102,7 @@ ANSWER:
 """
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",   # supported & fast
+        model="gpt-3.5-turbo",   # supported & fast
         messages=[
             {"role": "user", "content": prompt}
         ],
