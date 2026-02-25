@@ -1,63 +1,21 @@
 # -*- coding: utf-8 -*-
-
 import streamlit as st
 import requests
+import json
 
 # ================= CONFIG =================
 MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
 HF_API_KEY = st.secrets["HF_API_KEY"]
-
-MONDAY_URL = "https://api.monday.com/v2"
-
-# ✅ NEW Hugging Face Chat endpoint
-HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
-
-# ✅ Supported model for free accounts
+MONDAY_URL = "https://api.monday.com"
+HF_CHAT_URL = "https://router.huggingface.co"
 HF_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-
 BOARD_IDS = [5026839123, 5026839113]
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-# =========================================
 
-
-# ---------- FORMAT DATA ----------
-def format_selected_boards(data):
-    DEFAULTS = {
-        "Status": "Pending",
-        "Owner": "Unassigned",
-        "Due Date": "No deadline",
-        "Priority": "Normal",
-        "Stage": "Early stage",
-        "Deal Value": "Value not finalized"
-    }
-
-    text = ""
-    boards = data.get("data", {}).get("boards", [])
-
-    for board in boards:
-        text += f"\nBoard: {board['name']}\n"
-        text += "-" * 40 + "\n"
-
-        for item in board.get("items_page", {}).get("items", []):
-            text += f"Task: {item['name']}\n"
-
-            for col in item.get("column_values", []):
-                title = col["column"]["title"]
-                value = col["text"]
-
-                if value and value.strip():
-                    text += f"{title}: {value}\n"
-                elif title in DEFAULTS:
-                    text += f"{title}: {DEFAULTS[title]}\n"
-
-            text += "\n"
-
-    return text
-
-
-# ---------- FETCH MONDAY DATA ----------
+# ================= DATA FETCHING (OPTIMIZED) =================
+@st.cache_data(ttl=600) # ⚡ EFFICIENCY: Only hits Monday API once every 10 mins
 def fetch_latest_context():
     query = f"""
     {{
@@ -75,119 +33,72 @@ def fetch_latest_context():
       }}
     }}
     """
+    headers = {"Authorization": MONDAY_API_KEY, "Content-Type": "application/json"}
+    try:
+        response = requests.post(MONDAY_URL, json={"query": query}, headers=headers, timeout=15)
+        data = response.json()
+        
+        # Compact formatting to save tokens
+        text = ""
+        for board in data.get("data", {}).get("boards", []):
+            text += f"\n[Board: {board['name']}]\n"
+            for item in board.get("items_page", {}).get("items", []):
+                cols = ", ".join([f"{c['column']['title']}: {c['text']}" for c in item.get("column_values", []) if c['text']])
+                text += f"- {item['name']} | {cols}\n"
+        return text
+    except Exception as e:
+        return f"Error fetching data: {e}"
 
-    headers = {
-        "Authorization": MONDAY_API_KEY,
-        "Content-Type": "application/json"
-    }
+# ================= AI LOGIC (STREAMING) =================
+def ask_huggingface_stream(question, context):
+    # ⚡ EFFICIENCY: Only keep last 3 exchanges to avoid latency/cost bloat
+    short_history = st.session_state.chat_history[-6:]
+    
+    system_prompt = f"""Act as a Business Analyst. Use ONLY this data:
+    {context[:8000]} 
+    Rules: If not in data, say 'Not found'. Use bullet points."""
 
-    response = requests.post(
-        MONDAY_URL,
-        json={"query": query},
-        headers=headers,
-        timeout=30
-    )
-
-    return format_selected_boards(response.json())
-
-
-# ---------- HUGGING FACE AI (FIXED) ----------
-def ask_huggingface(question, context):
-    if not context or len(context.strip()) < 20:
-        return "No sufficient data available from the boards yet."
-
-    # Limit context size (important)
-    context = context[:20000]
-
-    prompt = f"""
-You are a professional business data assistant.
-
-You are analyzing data from TWO sources:
-1) Work_Order_Tracker_Data (tasks, work orders, operations)
-2) Deal_funnel_Data (sales deals, stages, values)
-
-STRICT RULES (MUST FOLLOW):
-- Use ONLY the information present in the provided data.
-- Do NOT guess, assume, or invent any information.
-- If an answer cannot be determined from the data, clearly say:
-  "Cannot be determined from the available data."
-- Quote task names, deal names, statuses, priorities, stages, and values EXACTLY as shown.
-- Do not merge or confuse work orders with deals unless explicitly asked.
-
-HOW TO INTERPRET QUESTIONS:
-- If the question is about tasks, work orders, status, priority, owner, or due dates → use Work_Order_Tracker_Data.
-- If the question is about deals, funnel, stages, or deal value → use Deal_funnel_Data.
-- If the question compares or summarizes both → analyze both datasets separately, then combine the results clearly.
-
-REASONING GUIDELINES:
-- High Priority > Normal > Low
-- Pending or Unassigned items are considered higher risk
-- Missing Due Date or Deal Value should be flagged as "Not available"
-- Early-stage deals are less certain than late-stage deals
-
-RESPONSE FORMAT (MANDATORY):
-1) **Direct Answer** – one or two sentences answering the question.
-2) **Details** – bullet points or numbered list with exact facts from the data.
-3) **Notes (if any)** – mention missing data, risks, or limitations.
-
-DATA:
-{context}
-
-USER QUESTION:
-{question}
-
-FINAL ANSWER:
-"""
-
-    headers = {
-        "Authorization": f"Bearer {HF_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
+    messages = [{"role": "system", "content": system_prompt}] + short_history + [{"role": "user", "content": question}]
+    
     payload = {
-    "model": HF_MODEL_NAME,
-    "messages": (
-        [{"role": "system", "content": "You are a helpful, professional assistant."}]
-        + st.session_state.chat_history
-        + [{"role": "user", "content": prompt}]
-    ),
-    "temperature": 0.3,
-    "max_tokens": 300
-}
-
-    response = requests.post(
-        HF_CHAT_URL,
-        headers=headers,
-        json=payload,
-        timeout=60
-    )
-
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-
-    return f"AI error: {response.status_code}"
-
+        "model": HF_MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 500,
+        "stream": True # ⚡ EFFICIENCY: Faster perceived speed
+    }
+    
+    headers = {"Authorization": f"Bearer {HF_API_KEY}", "Content-Type": "application/json"}
+    
+    response = requests.post(HF_CHAT_URL, headers=headers, json=payload, stream=True, timeout=60)
+    
+    for line in response.iter_lines():
+        if line:
+            chunk = line.decode("utf-8").replace("data: ", "")
+            if chunk == "[DONE]": break
+            try:
+                content = json.loads(chunk)["choices"][0]["delta"].get("content", "")
+                yield content
+            except:
+                pass
 
 # ================= STREAMLIT UI =================
-st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
+st.set_page_config(page_title="Monday AI", layout="wide")
+st.title("🚀 Monday.com Optimized AI")
 
-st.title(" monday.com AI Chatbot (Hugging Face)")
-st.caption("Live data • Stable AI • Internship-ready")
+# Display history
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
-question = st.text_input("Ask a question about work orders or deals:")
+if prompt := st.chat_input("Ask about work orders or deals..."):
+    st.session_state.chat_history.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.write(prompt)
 
-if question:
-    with st.spinner("Fetching latest data from monday.com..."):
+    with st.chat_message("assistant"):
         context_data = fetch_latest_context()
-
-    with st.spinner("AI is thinking..."):
-        answer = ask_huggingface(question, context_data)
-
-    st.success("Answer")
-    st.write(answer)
-    st.session_state.chat_history.append(
-    {"role": "user", "content": question}
-    )
-    st.session_state.chat_history.append(
-    {"role": "assistant", "content": answer}
-    )
+        # ⚡ EFFICIENCY: Stream response directly to UI
+        full_response = st.write_stream(ask_huggingface_stream(prompt, context_data))
+    
+    st.session_state.chat_history.append({"role": "assistant", "content": full_response})
