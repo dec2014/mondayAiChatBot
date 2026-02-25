@@ -9,10 +9,10 @@ HF_API_KEY = st.secrets["HF_API_KEY"]
 
 MONDAY_URL = "https://api.monday.com/v2"
 
-# ✅ NEW Hugging Face Chat endpoint
+
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 
-# ✅ Supported model for free accounts
+
 HF_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
 BOARD_IDS = [5026839123, 5026839113]
@@ -97,14 +97,32 @@ def ask_huggingface(question, context):
     context = context[:6000]
 
     prompt = f"""
-Answer the question using ONLY the data below.
-Do not guess or add extra information.
+AYou are a professional business assistant analyzing task and deal data.
+
+IMPORTANT RULES:
+- Use ONLY the data provided below.
+- If information is missing, clearly say "Not available".
+- Do NOT guess or invent any values.
+- Base conclusions strictly on Status, Priority, Owner, Due Date, and Stage.
 
 DATA:
 {context}
 
-QUESTION:
+USER QUESTION:
 {question}
+
+INSTRUCTIONS:
+1. Understand the user’s intent (summary, list, comparison, prioritization, explanation, etc.).
+2. Extract only relevant information from the data.
+3. Apply logical reasoning if needed (e.g., high priority > normal, unassigned tasks are risky).
+4. Present the answer in a clear, structured format.
+
+RESPONSE FORMAT:
+- Start with a short direct answer.
+- Then provide details in bullet points or numbered lists.
+- If no relevant data exists, say: "No relevant data found."
+
+FINAL ANSWER:
 """
 
     headers = {
