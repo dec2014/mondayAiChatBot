@@ -2,18 +2,14 @@
 
 import streamlit as st
 import requests
-import google.generativeai as genai
 
 # ================= CONFIG =================
 MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
-
-GEMINI_KEYS = [
-    st.secrets["GEMINI_API_KEY_1"],
-    st.secrets["GEMINI_API_KEY_2"],
-    st.secrets["GEMINI_API_KEY_3"],
-]
+HF_API_KEY = st.secrets["HF_API_KEY"]
 
 MONDAY_URL = "https://api.monday.com/v2"
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
+
 BOARD_IDS = [5026839123, 5026839113]
 # =========================================
 
@@ -81,14 +77,13 @@ def fetch_latest_context():
     return format_selected_boards(r.json())
 
 
-# ---------- GEMINI WITH API ROTATION ----------
-def ask_gemini_with_rotation(question, context):
+# ---------- HUGGING FACE AI ----------
+def ask_huggingface(question, context):
     if not context or len(context.strip()) < 20:
         return "No sufficient data available from the boards yet."
 
     prompt = f"""
-You are an assistant that answers questions using ONLY the data below.
-Do not guess or add new information.
+Answer the question using ONLY the data below.
 
 DATA:
 {context}
@@ -99,34 +94,37 @@ QUESTION:
 ANSWER:
 """
 
-    for idx, api_key in enumerate(GEMINI_KEYS, start=1):
-        try:
-            genai.configure(api_key=api_key)
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}"
+    }
 
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": 0.2,
-                    "max_output_tokens": 400
-                }
-            )
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 200,
+            "temperature": 0.2
+        }
+    }
 
-            return response.text
+    response = requests.post(
+        HF_MODEL_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
 
-        except Exception as e:
-            # Try next key automatically
-            print(f"Gemini key {idx} failed: {e}")
-            continue
+    if response.status_code != 200:
+        return "AI service is temporarily unavailable."
 
-    return "All AI keys are currently exhausted. Please try again later."
+    result = response.json()
+    return result[0]["generated_text"]
 
 
 # ================= STREAMLIT UI =================
-st.set_page_config(page_title="Monday AI Chatbot (Gemini)", layout="centered")
+st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
 
-st.title("🤖 monday.com AI Chatbot (Google Gemini)")
-st.caption("Live data • Auto key rotation • Stable AI")
+st.title("🤖 monday.com AI Chatbot (Hugging Face)")
+st.caption("Live data • No strict quota • Stable demo")
 
 question = st.text_input("Ask a question about work orders or deals:")
 
@@ -134,8 +132,8 @@ if question:
     with st.spinner("Fetching latest data..."):
         context_data = fetch_latest_context()
 
-    with st.spinner("Gemini is thinking..."):
-        answer = ask_gemini_with_rotation(question, context_data)
+    with st.spinner("Thinking..."):
+        answer = ask_huggingface(question, context_data)
 
     st.success("Answer")
     st.write(answer)
