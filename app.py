@@ -97,7 +97,7 @@ def ask_huggingface(question, context):
         return "No sufficient data available from the boards yet."
 
     # Limit context size (important)
-    context = context
+    context = context[:20000]
 
     prompt = f"""
 Answer the question using ONLY the data below.
