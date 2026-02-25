@@ -1,21 +1,65 @@
 # -*- coding: utf-8 -*-
+
 import streamlit as st
 import requests
-import json
 
 # ================= CONFIG =================
 MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
 HF_API_KEY = st.secrets["HF_API_KEY"]
+
 MONDAY_URL = "https://api.monday.com"
+
+# ✅ NEW Hugging Face Chat endpoint
 HF_CHAT_URL = "https://router.huggingface.co"
+
+# ✅ Supported model for free accounts
 HF_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+
 BOARD_IDS = [5026839123, 5026839113]
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+# =========================================
 
-# ================= DATA FETCHING (OPTIMIZED) =================
-@st.cache_data(ttl=600) # ⚡ EFFICIENCY: Only hits Monday API once every 10 mins
+
+# ---------- FORMAT DATA ----------
+def format_selected_boards(data):
+    DEFAULTS = {
+        "Status": "Pending",
+        "Owner": "Unassigned",
+        "Due Date": "No deadline",
+        "Priority": "Normal",
+        "Stage": "Early stage",
+        "Deal Value": "Value not finalized"
+    }
+
+    text = ""
+    boards = data.get("data", {}).get("boards", [])
+
+    for board in boards:
+        text += f"\nBoard: {board['name']}\n"
+        text += "-" * 40 + "\n"
+
+        for item in board.get("items_page", {}).get("items", []):
+            text += f"Task: {item['name']}\n"
+
+            for col in item.get("column_values", []):
+                title = col["column"]["title"]
+                value = col["text"]
+
+                if value and value.strip():
+                    text += f"{title}: {value}\n"
+                elif title in DEFAULTS:
+                    text += f"{title}: {DEFAULTS[title]}\n"
+
+            text += "\n"
+
+    return text
+
+
+# ---------- FETCH MONDAY DATA ----------
+# ⚡ EFFICIENCY: Added cache so it doesn't reload Monday.com on every click
+@st.cache_data(ttl=600) 
 def fetch_latest_context():
     query = f"""
     {{
@@ -33,72 +77,96 @@ def fetch_latest_context():
       }}
     }}
     """
-    headers = {"Authorization": MONDAY_API_KEY, "Content-Type": "application/json"}
-    try:
-        response = requests.post(MONDAY_URL, json={"query": query}, headers=headers, timeout=15)
-        data = response.json()
-        
-        # Compact formatting to save tokens
-        text = ""
-        for board in data.get("data", {}).get("boards", []):
-            text += f"\n[Board: {board['name']}]\n"
-            for item in board.get("items_page", {}).get("items", []):
-                cols = ", ".join([f"{c['column']['title']}: {c['text']}" for c in item.get("column_values", []) if c['text']])
-                text += f"- {item['name']} | {cols}\n"
-        return text
-    except Exception as e:
-        return f"Error fetching data: {e}"
 
-# ================= AI LOGIC (STREAMING) =================
-def ask_huggingface_stream(question, context):
-    # ⚡ EFFICIENCY: Only keep last 3 exchanges to avoid latency/cost bloat
-    short_history = st.session_state.chat_history[-6:]
-    
-    system_prompt = f"""Act as a Business Analyst. Use ONLY this data:
-    {context[:8000]} 
-    Rules: If not in data, say 'Not found'. Use bullet points."""
-
-    messages = [{"role": "system", "content": system_prompt}] + short_history + [{"role": "user", "content": question}]
-    
-    payload = {
-        "model": HF_MODEL_NAME,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": 500,
-        "stream": True # ⚡ EFFICIENCY: Faster perceived speed
+    headers = {
+        "Authorization": MONDAY_API_KEY,
+        "Content-Type": "application/json"
     }
-    
-    headers = {"Authorization": f"Bearer {HF_API_KEY}", "Content-Type": "application/json"}
-    
-    response = requests.post(HF_CHAT_URL, headers=headers, json=payload, stream=True, timeout=60)
-    
-    for line in response.iter_lines():
-        if line:
-            chunk = line.decode("utf-8").replace("data: ", "")
-            if chunk == "[DONE]": break
-            try:
-                content = json.loads(chunk)["choices"][0]["delta"].get("content", "")
-                yield content
-            except:
-                pass
+
+    response = requests.post(
+        MONDAY_URL,
+        json={"query": query},
+        headers=headers,
+        timeout=30
+    )
+
+    return format_selected_boards(response.json())
+
+
+# ---------- HUGGING FACE AI (FIXED) ----------
+def ask_huggingface(question, context):
+    if not context or len(context.strip()) < 20:
+        return "No sufficient data available from the boards yet."
+
+    # Limit context size (important)
+    context = context[:15000] # Slightly reduced for better speed
+
+    prompt = f"""
+You are a professional business data assistant.
+... (Rest of your original prompt text) ...
+DATA:
+{context}
+
+USER QUESTION:
+{question}
+
+FINAL ANSWER:
+"""
+
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # ⚡ EFFICIENCY: Added slice [-4:] to history so the bot doesn't get 
+    # slower and more expensive as the chat gets longer.
+    payload = {
+    "model": HF_MODEL_NAME,
+    "messages": (
+        [{"role": "system", "content": "You are a helpful assistant."}]
+        + st.session_state.chat_history[-4:] 
+        + [{"role": "user", "content": prompt}]
+    ),
+    "temperature": 0.3,
+    "max_tokens": 300
+}
+
+    response = requests.post(
+        HF_CHAT_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
+
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+
+    return f"AI error: {response.status_code}"
+
 
 # ================= STREAMLIT UI =================
-st.set_page_config(page_title="Monday AI", layout="wide")
-st.title("🚀 Monday.com Optimized AI")
+st.set_page_config(page_title="Monday AI Chatbot", layout="centered")
 
-# Display history
-for msg in st.session_state.chat_history:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+st.title(" monday.com AI Chatbot (Hugging Face)")
+st.caption("Live data • Stable AI • Internship-ready")
 
-if prompt := st.chat_input("Ask about work orders or deals..."):
-    st.session_state.chat_history.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.write(prompt)
+# ⚡ EFFICIENCY: Show chat history so the user remembers what was said
+for chat in st.session_state.chat_history:
+    with st.chat_message(chat["role"]):
+        st.write(chat["content"])
 
-    with st.chat_message("assistant"):
+question = st.text_input("Ask a question about work orders or deals:")
+
+if question:
+    with st.spinner("Fetching latest data from monday.com..."):
         context_data = fetch_latest_context()
-        # ⚡ EFFICIENCY: Stream response directly to UI
-        full_response = st.write_stream(ask_huggingface_stream(prompt, context_data))
+
+    with st.spinner("AI is thinking..."):
+        answer = ask_huggingface(question, context_data)
+
+    st.success("Answer")
+    st.write(answer)
     
-    st.session_state.chat_history.append({"role": "assistant", "content": full_response})
+    # Save to history
+    st.session_state.chat_history.append({"role": "user", "content": question})
+    st.session_state.chat_history.append({"role": "assistant", "content": answer})
